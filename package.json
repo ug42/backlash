@@ -1,0 +1,14 @@
+{
+  "name": "backlash",
+  "version": "0.1.0",
+  "description": "Backlash: a seven-minute social deduction game for 5 to 9 players",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "FAST=1 node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "ws": "^8.18.0" },
+  "license": "MIT"
+}

@@ -1,0 +1,12 @@
+# Render blueprint: one free web service that serves the client and the WebSocket.
+services:
+  - type: web
+    name: backlash
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
