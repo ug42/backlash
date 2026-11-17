@@ -98,7 +98,7 @@ wss.on('connection', (ws) => {
         }
         case 'addBot': room && room.addBot(pid); break;
         case 'removeBot': room && room.removeBot(pid); break;
-        case 'start': room && room.start(pid, { learning: !!m.learning }); break;
+        case 'start': room && room.start(pid, { learning: !!m.learning, events: m.events, variety: m.variety }); break;
         case 'twist': room && room.choose(pid, m.target, m.dir); break;
         case 'ready': room && room.ready(pid); break;
         case 'declare': room && room.declare(pid, m.side); break;

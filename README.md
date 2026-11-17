@@ -89,7 +89,25 @@ Surveyor, Watchmaker and Balance Wheel, the Decoy's reversing sham, Rust as a
 third faction, the Mainspring and loose keys at odd counts, and scoring by
 headcount, then correct declarations, then tightness.
 
-The lobby has a "learning round" switch that deals everyone a plain Cog.
+Randomness, each switchable by the host in the lobby:
+
+- **Random events.** Three are drawn per round, one per tick, and announced when
+  the tick begins: Slipped Gear, Stiff Springs, Greased Springs, Scramble, Fog,
+  Stuck Dial, or Calm.
+- **Random faceplates.** Each round draws its set from the full list, always with
+  one Rust, the Mainspring at odd counts and at least two information plates.
+- **Learning round.** Everyone is a plain Cog and there are no events.
+
+## The reveal
+
+After the declarations every client plays an animated replay in five steps: the
+deal, each tick, and the result. Each player has a lane; a marker slides along
+the six-step track as their spring moves, a dotted ring marks where it was
+dealt, and a chip flashes when their faceplate changes. The replay can be
+paused, stepped, skipped or watched again, and it respects the browser's
+reduced-motion setting.
+
+`npm run sim` plays 20,000 bot rounds per setting and prints balance figures.
 
 ## Known limits
 

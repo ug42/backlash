@@ -260,3 +260,64 @@ test('random full rounds never leave the track or break invariants', () => {
     if (r.rustWin) assert.equal(r.winners.length, 1);
   }
 });
+
+test('random faceplate draw: one Rust, Mainspring at odd counts, two information plates, Cracked only beside a Listener', () => {
+  for (let k = 0; k < 4000; k++) {
+    const n = 5 + (k % 5);
+    const r = E.drawPlates(n, Math.random);
+    assert.equal(r.length, n);
+    assert.equal(r.filter((x) => x === 'Rust').length, 1);
+    assert.equal(r.includes('Mainspring'), n % 2 === 1);
+    assert.ok(r.filter((x) => E.INFO.includes(x)).length >= 2);
+    if (r.includes('Cracked')) assert.ok(r.includes('Listener') && n >= 7);
+    const uniq = r.filter((x) => x !== 'Cog');
+    assert.equal(new Set(uniq).size, uniq.length);
+  }
+});
+
+test('events: three per round, no repeats except Calm, no Scramble on the last tick', () => {
+  for (let k = 0; k < 4000; k++) {
+    const ev = E.drawEvents(Math.random);
+    assert.equal(ev.length, 3);
+    ev.forEach((e) => assert.ok(E.EVENTS[e]));
+    assert.notEqual(ev[2], 'scramble');
+    const real = ev.filter((e) => e !== 'calm');
+    assert.equal(new Set(real).size, real.length);
+  }
+});
+
+test('Stiff Springs: one hand cannot flip a key at tightness 1', () => {
+  const st = make([S(2), W(1), S(2), W(2), S(2)]); st.events = ['stiff', 'calm', 'calm'];
+  E.resolveTick(st, idle(5, { 0: { target: 1, dir: 1 } }), never);
+  assert.equal(st.players[1].idx, W(1));
+});
+
+test('Greased Springs: every twist moves its target 2 steps; the recoil stays at 1', () => {
+  const st = make([S(3), W(1), S(2), W(2), S(2)]); st.events = ['greased', 'calm', 'calm'];
+  E.resolveTick(st, idle(5, { 0: { target: 1, dir: 1 } }), never);
+  assert.equal(st.players[1].idx, S(2));   // one hand, tightness 1: crosses and lands two steps on
+  assert.equal(st.players[0].idx, S(2));   // recoil of one step
+  const st2 = make([S(3), W(2), S(2), W(2), S(2)]); st2.events = ['greased', 'calm', 'calm'];
+  E.resolveTick(st2, idle(5, { 0: { target: 1, dir: 1 } }), never);
+  assert.equal(st2.players[1].idx, W(1));  // still needs two hands from tightness 2
+});
+
+test('Slipped Gear: a random spring slips toward the midline, or across it from tightness 1', () => {
+  let st = make([S(3), W(1), S(2), W(2), S(2)]); st.events = ['slip', 'calm', 'calm'];
+  let rec = E.resolveTick(st, idle(5, {}), () => 0);          // rng 0 -> seat 0
+  assert.equal(rec.slip, 0); assert.equal(st.players[0].idx, S(2)); assert.equal(rec.chime, 0);
+  st = make([S(3), W(1), S(2), W(2), S(2)]); st.events = ['slip', 'calm', 'calm'];
+  rec = E.resolveTick(st, idle(5, {}), () => 0.3);            // seat 1, at tightness 1
+  assert.equal(rec.slip, 1); assert.equal(st.players[1].idx, S(1)); assert.equal(rec.chime, 1);
+});
+
+test('Scramble swaps two faceplates after ticks 1 and 2; Stuck Dial freezes one dial', () => {
+  let st = make([S(2), W(2), S(2), W(2), S(2)], ['Rust', 'Decoy', 'Cog', 'Cog', 'Mainspring']); st.events = ['scramble', 'calm', 'calm'];
+  let rec = E.resolveTick(st, idle(5, {}), () => 0);          // seats 0 and 1
+  assert.deepEqual(rec.scramble, [0, 1]);
+  assert.equal(st.players[0].role, 'Decoy'); assert.equal(st.players[1].role, 'Rust');
+  assert.equal(rec.reports[0].newRole, 'Decoy');
+  st = make([S(2), W(2), S(2), W(2), S(2)]); st.events = ['stuck', 'calm', 'calm'];
+  rec = E.resolveTick(st, idle(5, { 2: { target: 0, dir: -1 } }), () => 0);   // seat 0 is stuck and is twisted
+  assert.equal(st.players[0].idx, S(1)); assert.equal(rec.reports[0].tightness, 2);
+});

@@ -121,7 +121,11 @@
           <button data-act="addBot" ${n >= state.max ? 'disabled' : ''}>Add a bot</button>
           <button data-act="removeBot" class="ghost" ${state.players.some((p) => p.isBot) ? '' : 'disabled'}>Remove a bot</button>
         </div>
-        <p class="row small" style="margin-top:12px"><input id="learning" type="checkbox" ${state.learning ? 'checked' : ''}> <label for="learning" style="margin:0;font-size:1rem;color:var(--ink)">Learning round: everyone is a plain Cog</label></p>
+        <div class="opts">
+          <label class="opt"><input id="events" type="checkbox" ${state.events ? 'checked' : ''}> Random events: each tick has its own twist on the rules</label>
+          <label class="opt"><input id="variety" type="checkbox" ${state.variety ? 'checked' : ''}> Random faceplates: a different set is drawn every round</label>
+          <label class="opt"><input id="learning" type="checkbox" ${state.learning ? 'checked' : ''}> Learning round: everyone is a plain Cog, no events</label>
+        </div>
         <button class="primary wide" data-act="start" ${ok ? '' : 'disabled'}>${ok ? 'Deal the round' : `Need ${state.min} players`}</button>
       </section>` : '<section class="card tight muted">Waiting for the host to deal.</section>'}`;
   }
@@ -156,7 +160,8 @@
   function chimes(g) {
     if (!g.table.length) return '';
     return `<section class="card tight"><h3>What the whole table heard</h3><div class="chimes">${g.table.map((t) => `
-      <span class="chip">Tick ${t.tick}: ${t.chime} ${t.chime === 1 ? 'key' : 'keys'} crossed</span>
+      ${t.event !== 'Calm' ? `<span class="chip">Tick ${t.tick} event: ${esc(t.event)}</span>` : ''}
+      <span class="chip">${t.fog ? `Tick ${t.tick}: the Chime was lost in fog` : `Tick ${t.tick}: ${t.chime} ${t.chime === 1 ? 'key' : 'keys'} crossed`}</span>
       ${t.overwind ? `<span class="chip warn">Tick ${t.tick}: Overwind, a spring snapped</span>` : ''}
       ${t.idle.length ? `<span class="chip">Tick ${t.tick} idle: ${esc(t.idle.join(', '))}</span>` : ''}`).join('')}</div></section>`;
   }
@@ -173,6 +178,7 @@
     return `
       <section class="card tight row"><div class="grow"><h2 style="margin:0">Tick ${g.tick} of ${g.ticks}</h2><div class="small muted">Talk, then lock in one twist.</div></div>
         <div class="small muted">Faceplate: <strong style="color:var(--ink)">${esc(g.faceplate)}</strong></div></section>
+      ${g.event ? `<section class="card tight event"><h3>This tick's event</h3><strong>${esc(g.event.name)}</strong><div>${esc(g.event.text)}</div></section>` : ''}
       <section class="card">${dial(g, false)}</section>
       ${chimes(g)}
       <section class="card">
@@ -206,61 +212,170 @@
       ${chimes(g)}${history(g)}`;
   }
 
-  function track(dealIdx, finalIdx) {
-    const cell = (i) => `<span class="cell ${i === finalIdx ? 'final' : ''} ${i === dealIdx ? 'deal' : ''}"></span>`;
-    return `<span class="track" role="img" aria-label="Dealt ${pos(dealIdx)}, finished ${pos(finalIdx)}">${[0, 1, 2].map(cell).join('')}<span class="mid"></span>${[3, 4, 5].map(cell).join('')}</span>`;
-  }
   const pos = (i) => (i >= 3 ? '↻' + (i - 2) : '↺' + (3 - i));
+  const X = [8, 24, 40, 60, 76, 92];            // marker position (%) for each track index
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let replay = null;                             // { key, step, playing, timer }
+  const STEPS = 5;                               // deal, tick 1..3, result
 
-  function revealView() {
+  function resultText(r) {
+    if (r.rustWin) return ['Rust wins', `${r.flippedAndWrong} flipped players declared the wrong side. The clock seizes.`];
+    if (!r.winSide) return ['Draw', 'Level on headcount, declarations and tightness.'];
+    return [`${ARROW[r.winSide]} ${SIDE[r.winSide]} wins`,
+      `${r.count.sunwise} Sunwise to ${r.count.widdershins} Widdershins` + (r.how === 'headcount' ? '.' : `, settled by ${r.how === 'declarations' ? 'correct declarations' : 'total tightness'}.`)];
+  }
+
+  function revealShell() {
     const r = state.reveal;
-    let head; let sub;
-    if (r.rustWin) { head = 'Rust wins'; sub = `${r.flippedAndWrong} flipped players declared the wrong side. The clock seizes.`; }
-    else if (!r.winSide) { head = 'Draw'; sub = 'Level on headcount, declarations and tightness.'; }
-    else {
-      head = `${ARROW[r.winSide]} ${SIDE[r.winSide]} wins`;
-      sub = `${r.count.sunwise} Sunwise to ${r.count.widdershins} Widdershins` + (r.how === 'headcount' ? '.' : `, settled by ${r.how === 'declarations' ? 'correct declarations' : 'total tightness'}.`);
-    }
-    const mine = r.players.find((p) => p.id === me().id);
     return `
-      <section class="card result"><h1>${head}</h1><p>${esc(sub)}</p>
-        ${mine ? `<p class="${mine.won ? 'win' : 'lose'}">${mine.won ? 'You won this round.' : 'You did not win this round.'}${mine.seized ? ' You declared the wrong side.' : ''}</p>` : ''}</section>
-      <section class="card"><h3>Every spring</h3><div class="scroll"><table>
-        <tr><th>Player</th><th>Track</th><th>Dealt</th><th>Finished</th><th>Declared</th><th>Faceplate</th><th></th></tr>
-        ${r.players.map((p) => `<tr>
-          <td>${esc(p.name)}${p.loose ? ' <span class="muted small">(loose key)</span>' : ''}</td>
-          <td>${track(p.dealIdx, p.finalIdx)}</td><td>${pos(p.dealIdx)}</td><td>${pos(p.finalIdx)}</td>
-          <td>${ARROW[p.declared]}${p.seized ? ' <span class="jam">wrong</span>' : ''}</td>
-          <td class="small">${esc(p.dealPlate)}${p.dealPlate !== p.finalPlate ? ' → ' + esc(p.finalPlate) : ''}</td>
-          <td class="${p.won ? 'win' : 'lose'}">${p.won ? 'Won' : ''}</td></tr>`).join('')}
-      </table></div><p class="small muted" style="margin-top:8px">Outlined cell: where the spring was dealt. Filled cell: where it finished. The bar is the midline, Widdershins on the left.</p></section>
-      <section class="card"><h3>What actually happened</h3>
-        ${r.ticks.map((t) => `<details ${t.tick === 1 ? 'open' : ''}><summary>Tick ${t.tick}: ${t.chime} ${t.chime === 1 ? 'key' : 'keys'} crossed${t.snap ? ', Overwind' : ''}</summary>
-          <ul class="twists">
-            ${t.twists.map((w) => `<li>${esc(w.from)} twisted ${esc(w.target)} ${ARROW[w.dir]}${w.jammed ? ' <span class="jam">(jammed)</span>' : ''}</li>`).join('')}
-            ${t.idle.length ? `<li class="muted">Idle: ${esc(t.idle.join(', '))}</li>` : ''}
-            ${t.reversal ? `<li>${esc(t.reversal.actor)}'s Decoy sham on ${esc(t.reversal.target)} reversed</li>` : ''}
-            ${t.snap ? `<li class="jam">Overwind: ${esc(t.snap)}'s spring snapped to the other side</li>` : ''}
-            ${t.frozen ? `<li>Rust froze ${esc(t.frozen)}'s dial</li>` : ''}
-            ${t.hops.map((h) => `<li class="muted">${esc(h.plate)} jumped from ${esc(h.from)} to ${esc(h.to)}</li>`).join('')}
-            <li class="muted">After the tick: ${r.players.map((p, i) => esc(p.name) + ' ' + pos(t.positions[i])).join(', ')}</li>
-          </ul></details>`).join('')}
+      <section class="card replay" id="replay">
+        <div class="row"><div class="grow"><h3 id="rp-kicker">Replay</h3><h2 id="rp-title" style="margin:0"></h2></div>
+          <div class="rp-dots" id="rp-dots" aria-hidden="true">${Array.from({ length: STEPS }, () => '<span></span>').join('')}</div></div>
+        <p id="rp-sub" class="muted" style="min-height:1.5em"></p>
+        <div class="board" role="img" aria-label="Every player's spring on the track, step by step">
+          <div class="board-head"><span>↺ Widdershins</span><span>Sunwise ↻</span></div>
+          ${r.players.map((p, i) => `
+          <div class="lane" data-i="${i}">
+            <div class="who">${esc(p.name)}${p.id === me().id ? ' <span class="muted">(you)</span>' : ''}</div>
+            <div class="rail"><span class="notch" style="left:${X[0]}%"></span><span class="notch" style="left:${X[1]}%"></span><span class="notch" style="left:${X[2]}%"></span>
+              <span class="midline"></span><span class="notch" style="left:${X[3]}%"></span><span class="notch" style="left:${X[4]}%"></span><span class="notch" style="left:${X[5]}%"></span>
+              <span class="dealt" style="left:${X[p.dealIdx]}%" title="Dealt here"></span>
+              <span class="marker"></span></div>
+            <div class="plate"><span class="plate-name"></span><span class="badge"></span></div>
+          </div>`).join('')}
+        </div>
+        <ul class="rp-events" id="rp-events"></ul>
+        <div class="row rp-ctl">
+          <button data-act="rp-prev" aria-label="Previous step">◀</button>
+          <button data-act="rp-play" class="grow" id="rp-play"></button>
+          <button data-act="rp-next" aria-label="Next step">▶</button>
+          <button data-act="rp-end" class="ghost">Skip to result</button>
+        </div>
+        <p class="small muted" style="margin:8px 0 0">Hollow ring: where each spring was dealt. The chip on the right is the faceplate that player holds at this point.</p>
       </section>
-      <section class="card"><h3>Rounds won</h3>${people(false)}</section>
-      ${isHost() ? '<button class="primary wide" data-act="lobby">Back to the lobby</button>' : '<section class="card tight muted">Waiting for the host to start the next round.</section>'}`;
+      <section class="card result" id="rp-result" hidden></section>
+      <section class="card"><details><summary>Full record</summary>
+        <div class="scroll"><table>
+        <tr><th>Player</th><th>Dealt</th><th>Finished</th><th>Declared</th><th>Faceplate</th><th></th></tr>
+        ${r.players.map((p) => `<tr><td>${esc(p.name)}${p.loose ? ' <span class="muted small">(loose key)</span>' : ''}</td><td>${pos(p.dealIdx)}</td><td>${pos(p.finalIdx)}</td>
+          <td>${ARROW[p.declared]}${p.seized ? ' <span class="jam">wrong</span>' : ''}</td>
+          <td class="small">${esc(p.dealPlate)}${p.dealPlate !== p.finalPlate ? ' → ' + esc(p.finalPlate) : ''}</td><td class="${p.won ? 'win' : 'lose'}">${p.won ? 'Won' : ''}</td></tr>`).join('')}
+        </table></div>
+        ${r.ticks.map((t) => `<p style="margin:12px 0 2px"><strong>Tick ${t.tick}</strong></p><ul class="twists">${tickLines(t).map((l) => `<li>${l}</li>`).join('')}</ul>`).join('')}
+      </details></section>
+      <div id="rp-foot"></div>`;
+  }
+
+  function tickLines(t) {
+    const out = [];
+    if (t.event) out.push(`Event: <strong>${esc(t.event)}</strong>`);
+    t.twists.forEach((w) => out.push(`${esc(w.from)} twisted ${esc(w.target)} ${ARROW[w.dir]}${w.jammed ? ' <span class="jam">(jammed)</span>' : ''}`));
+    if (t.idle.length) out.push(`<span class="muted">Idle: ${esc(t.idle.join(', '))}</span>`);
+    if (t.reversal) out.push(`${esc(t.reversal.actor)}'s Decoy sham on ${esc(t.reversal.target)} reversed`);
+    if (t.snap) out.push(`<span class="jam">Overwind: ${esc(t.snap)}'s spring snapped to the other side</span>`);
+    if (t.slip) out.push(`<span class="jam">Slipped Gear: ${esc(t.slip)}'s spring slipped</span>`);
+    if (t.frozen) out.push(`Rust froze ${esc(t.frozen)}'s dial`);
+    if (t.stuck) out.push(`${esc(t.stuck)}'s dial stuck`);
+    t.hops.forEach((h) => out.push(`<span class="muted">${esc(h.plate)} jumped from ${esc(h.from)} to ${esc(h.to)}</span>`));
+    if (t.scramble) out.push(`<span class="muted">Scramble: ${esc(t.scramble[0])} and ${esc(t.scramble[1])} swapped faceplates</span>`);
+    return out;
+  }
+
+  /** Snapshot of every seat at a replay step: 0 = deal, 1..3 = after that tick, 4 = result. */
+  function snap(r, step) {
+    const t = step === 0 ? null : r.ticks[Math.min(step, 3) - 1];
+    return r.players.map((p, i) => ({ idx: t ? t.positions[i] : p.dealIdx, plate: t ? t.plates[i] : p.dealPlate }));
+  }
+
+  function applyStep() {
+    const r = state.reveal; const step = replay.step;
+    const now = snap(r, step); const prev = step > 0 ? snap(r, step - 1) : now;
+    const t = step >= 1 && step <= 3 ? r.ticks[step - 1] : null;
+    const [head, sub] = resultText(r);
+    $('#rp-kicker').textContent = `Replay, step ${step + 1} of ${STEPS}`;
+    $('#rp-title').textContent = step === 0 ? 'The deal' : step === 4 ? 'Declarations' : `Tick ${step}` + (t.event ? `: ${t.event}` : '');
+    $('#rp-sub').textContent = step === 0 ? 'Where every spring started, and who held which faceplate.'
+      : step === 4 ? 'Each player declared a side. Wrong calls are marked.'
+        : `${t.chime} ${t.chime === 1 ? 'key' : 'keys'} crossed the midline.`;
+    [...$('#rp-dots').children].forEach((d, i) => d.classList.toggle('on', i <= step));
+    document.querySelectorAll('.lane').forEach((lane) => {
+      const i = Number(lane.dataset.i); const p = r.players[i]; const s = now[i]; const q = prev[i];
+      const m = lane.querySelector('.marker');
+      const sunwise = s.idx >= 3;
+      m.style.left = X[s.idx] + '%';
+      m.textContent = sunwise ? '↻' : '↺';
+      m.className = 'marker ' + (sunwise ? 'ms' : 'mw');
+      m.title = pos(s.idx);
+      const crossed = (s.idx >= 3) !== (q.idx >= 3);
+      lane.classList.toggle('crossed', crossed);
+      const pn = lane.querySelector('.plate-name');
+      if (pn.textContent !== s.plate) {
+        pn.textContent = s.plate;
+        if (step > 0) { pn.classList.remove('flash'); void pn.offsetWidth; pn.classList.add('flash'); }
+      }
+      pn.classList.toggle('rust', /^Rust/.test(s.plate));
+      const badge = lane.querySelector('.badge');
+      if (step === 4) {
+        badge.innerHTML = `declared ${ARROW[p.declared]}${p.seized ? ' <span class="jam">wrong</span>' : ''}${p.won ? ' <span class="win">won</span>' : ''}`;
+      } else badge.textContent = pos(s.idx) + (crossed ? ' flipped' : '');
+      lane.classList.toggle('winner', step === 4 && p.won);
+    });
+    const ev = $('#rp-events');
+    ev.innerHTML = t ? tickLines(t).map((l, k) => `<li style="animation-delay:${reduced ? 0 : k * 90}ms">${l}</li>`).join('') : '';
+    const res = $('#rp-result');
+    if (step === 4) {
+      const mine = r.players.find((p) => p.id === me().id);
+      res.innerHTML = `<h1>${head}</h1><p>${esc(sub)}</p>${mine ? `<p class="${mine.won ? 'win' : 'lose'}">${mine.won ? 'You won this round.' : 'You did not win this round.'}${mine.seized ? ' You declared the wrong side.' : ''}</p>` : ''}`;
+      res.hidden = false;
+    } else res.hidden = true;
+    $('#rp-play').textContent = step === 4 ? 'Watch again' : replay.playing ? 'Pause' : 'Play';
+  }
+
+  function schedule() {
+    clearTimeout(replay.timer);
+    if (!replay.playing || replay.step >= STEPS - 1) { replay.playing = false; return; }
+    replay.timer = setTimeout(() => { if (!replay) return; replay.step++; applyStep(); schedule(); }, replay.step === 0 ? 2200 : 3800);
+  }
+
+  function revealFoot() {
+    $('#rp-foot').innerHTML = `<section class="card"><h3>Rounds won</h3>${people(false)}</section>
+      ${isHost() ? '<button class="primary wide" data-act="lobby" style="margin-top:14px">Back to the lobby</button>' : '<section class="card tight muted" style="margin-top:14px">Waiting for the host to start the next round.</section>'}`;
+  }
+
+  function showReveal(key) {
+    if (!replay || replay.key !== key) {
+      if (replay) clearTimeout(replay.timer);
+      app.innerHTML = revealShell();
+      replay = { key, step: 0, playing: !reduced, timer: null };
+      applyStep(); schedule();
+    }
+    revealFoot();
+  }
+
+  function replayAct(act) {
+    if (!replay) return;
+    if (act === 'rp-prev') { replay.playing = false; replay.step = Math.max(0, replay.step - 1); }
+    if (act === 'rp-next') { replay.playing = false; replay.step = Math.min(STEPS - 1, replay.step + 1); }
+    if (act === 'rp-end') { replay.playing = false; replay.step = STEPS - 1; }
+    if (act === 'rp-play') {
+      if (replay.step === STEPS - 1) { replay.step = 0; replay.playing = true; } else replay.playing = !replay.playing;
+    }
+    applyStep(); schedule();
   }
 
   function render() {
     const room = $('#room');
-    if (!state) { room.hidden = true; app.innerHTML = home(); return; }
+    if (!state) { room.hidden = true; if (replay) { clearTimeout(replay.timer); replay = null; } app.innerHTML = home(); return; }
     room.hidden = false; room.textContent = state.code;
     const key = state.phase + ':' + (state.game ? state.game.tick : 0);
     if (key !== lastPhaseKey) { sel = { target: null, dir: null }; lastPhaseKey = key; window.scrollTo(0, 0); }
     const focusId = document.activeElement && document.activeElement.id;
+    if (state.phase !== 'REVEAL' && replay) { clearTimeout(replay.timer); replay = null; }
+    if (state.phase === 'REVEAL' && state.reveal) { showReveal(state.code + ':' + state.reveal.ticks.map((t) => t.positions.join('')).join('|')); return; }
     if (!state.game && state.phase !== 'LOBBY') {
       app.innerHTML = '<section class="card">A round is in progress. You will join at the next deal.</section>' + `<section class="card">${people(false)}</section>`;
     } else {
-      app.innerHTML = { LOBBY: lobby, DEAL: dealView, TICK: tickView, DECLARE: declareView, REVEAL: revealView }[state.phase]();
+      app.innerHTML = { LOBBY: lobby, DEAL: dealView, TICK: tickView, DECLARE: declareView }[state.phase]();
     }
     if (focusId && $('#' + focusId)) $('#' + focusId).focus();
   }
@@ -279,8 +394,9 @@
     const b = ev.target.closest('[data-act]'); if (!b || b.disabled) return;
     const act = b.dataset.act;
     if (act === 'create' || act === 'join') return enter(act);
+    if (act.startsWith('rp-')) return replayAct(act);
     if (act === 'addBot' || act === 'removeBot' || act === 'lobby' || act === 'ready') return send({ t: act });
-    if (act === 'start') return send({ t: 'start', learning: !!($('#learning') && $('#learning').checked) });
+    if (act === 'start') return send({ t: 'start', learning: $('#learning').checked, events: $('#events').checked, variety: $('#variety').checked });
     if (act === 'declare') return send({ t: 'declare', side: Number(b.dataset.side) });
     if (act === 'target') sel.target = b.dataset.id;
     if (act === 'dir') sel.dir = Number(b.dataset.dir);

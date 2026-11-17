@@ -16,6 +16,18 @@ const SETUPS = {
   9: ['BalanceWheel', 'Listener', 'Cracked', 'Echo', 'Surveyor', 'Watchmaker', 'Rust', 'Mainspring', 'Decoy'],
 };
 const LOOSE = new Set(['BalanceWheel', 'Listener', 'Cracked', 'Echo', 'Surveyor', 'Watchmaker', 'Rust']);
+/** Random events: one is drawn for each tick at the deal and announced when that tick begins. */
+const EVENTS = {
+  calm: { name: 'Calm', text: 'Nothing unusual this tick.' },
+  slip: { name: 'Slipped Gear', text: 'After the twists land, one random spring slips a step toward the midline. A spring at tightness 1 slips across.' },
+  stiff: { name: 'Stiff Springs', text: 'This tick every crossing needs two hands, even on a key at tightness 1.' },
+  greased: { name: 'Greased Springs', text: 'This tick every twist moves its target 2 steps. The recoil is still 1 step.' },
+  scramble: { name: 'Scramble', text: 'After this tick two random players swap faceplates.' },
+  fog: { name: 'Fog', text: 'No Chime is announced for this tick.' },
+  stuck: { name: 'Stuck Dial', text: 'One random dial does not update this tick.' },
+};
+const EVENT_DECK = ['calm', 'calm', 'slip', 'stiff', 'greased', 'scramble', 'fog', 'stuck'];
+const INFO = ['BalanceWheel', 'Listener', 'Echo', 'Surveyor', 'Watchmaker'];
 const MIN_PLAYERS = 5;
 const MAX_PLAYERS = 9;
 const TICKS = 3;
@@ -35,6 +47,38 @@ function shuffle(a, rng) {
 }
 const pick = (a, rng) => a[Math.floor(rng() * a.length)];
 
+/** Three different events for the three ticks. A Scramble never lands on the last tick. */
+function drawEvents(rng) {
+  const deck = shuffle(EVENT_DECK.slice(), rng);
+  const out = [];
+  for (const e of deck) {
+    if (out.length === TICKS) break;
+    if (e !== 'calm' && out.includes(e)) continue;
+    if (e === 'scramble' && out.length === TICKS - 1) continue;
+    out.push(e);
+  }
+  while (out.length < TICKS) out.push('calm');
+  return out;
+}
+
+/**
+ * Draw a random set of faceplates. Always one Rust, the Mainspring at odd counts,
+ * at least two information plates, and a Cracked Listener only beside a real one.
+ */
+function drawPlates(n, rng) {
+  const fixed = ['Rust'].concat(n % 2 ? ['Mainspring'] : []);
+  const pool = INFO.concat(['Decoy', 'Cog', 'Cog'], n >= 7 ? ['Cracked'] : []);
+  let picked = shuffle(pool.slice(), rng).slice(0, n - fixed.length);
+  const rest = () => pool.filter((r) => r === 'Cog' || !picked.includes(r));
+  if (picked.includes('Cracked') && !picked.includes('Listener')) picked[picked.indexOf('Cracked')] = 'Listener';
+  while (picked.filter((r) => INFO.includes(r)).length < 2) {
+    const add = rest().find((r) => INFO.includes(r));
+    const out = picked.findIndex((r) => !INFO.includes(r));
+    picked[out] = add;
+  }
+  return shuffle(fixed.concat(picked), rng);
+}
+
 /** What a holder is told their faceplate is. The Cracked Listener looks like a Listener. */
 const shownRole = (role) => (role === 'Cracked' ? 'Listener' : role);
 
@@ -42,11 +86,13 @@ const shownRole = (role) => (role === 'Cracked' ? 'Listener' : role);
  * Deal a round.
  * @param {number} n players (5..9)
  * @param {() => number} rng
- * @param {{learning?: boolean}} [opts] learning: everyone is a Cog
+ * @param {{learning?: boolean, variety?: boolean, events?: boolean}} [opts]
+ *   learning: everyone is a Cog; variety: random faceplate set; events: random tick events
  */
 function deal(n, rng = Math.random, opts = {}) {
   if (n < MIN_PLAYERS || n > MAX_PLAYERS) throw new Error('Backlash needs 5 to 9 players');
-  let roles = opts.learning ? Array(n).fill('Cog') : shuffle(SETUPS[n].slice(), rng);
+  let roles = opts.learning ? Array(n).fill('Cog')
+    : opts.variety ? drawPlates(n, rng) : shuffle(SETUPS[n].slice(), rng);
   const big = rng() < 0.5 ? 1 : -1;
   const sides = shuffle(
     Array(Math.ceil(n / 2)).fill(big).concat(Array(Math.floor(n / 2)).fill(-big)), rng);
@@ -72,11 +118,12 @@ function deal(n, rng = Math.random, opts = {}) {
     cands.slice(0, k).forEach((p) => { p.idx = idxOf(big, 1); p.loose = true; });
   }
   players.forEach((p) => { p.dealIdx = p.idx; p.shown = tight(p.idx); });
-  return { n, players, tick: 0, sham: null, log: [], learning: !!opts.learning, larger: odd ? big : 0 };
+  const events = opts.events && !opts.learning ? drawEvents(rng) : Array(TICKS).fill('calm');
+  return { n, players, tick: 0, sham: null, log: [], learning: !!opts.learning, larger: odd ? big : 0, events };
 }
 
 /** Move a key by its incoming twists, applying the hands rule and the track ends. */
-function applyIncoming(start, incoming, sideBefore) {
+function applyIncoming(start, incoming, sideBefore, event) {
   if (!incoming.length) return start;
   const net = incoming.reduce((a, t) => a + t.steps, 0);
   if (net === 0) return start;
@@ -86,7 +133,7 @@ function applyIncoming(start, incoming, sideBefore) {
   if (crosses) {
     // Only twists from players on the side the key is pulled toward count as hands.
     const hands = incoming.filter((t) => Math.sign(t.steps) === dir && sideBefore[t.from] === dir).length;
-    const need = tight(start) === 1 ? 1 : 2;
+    const need = tight(start) === 1 && event !== 'stiff' ? 1 : 2;
     if (hands < need) next = start <= 2 ? 2 : 3;
   }
   return clamp(next);
@@ -102,6 +149,7 @@ function resolveTick(state, actions, rng = Math.random) {
   const { n, players } = state;
   if (state.tick >= TICKS) throw new Error('round is over');
   const tickNo = state.tick;
+  const event = (state.events && state.events[tickNo]) || 'calm';
   const before = players.map((p) => p.idx);
   const sideBefore = before.map(side);
   const rolesBefore = players.map((p) => p.role);
@@ -125,7 +173,7 @@ function resolveTick(state, actions, rng = Math.random) {
 
   // Incoming twists per target.
   const inc = Array.from({ length: n }, () => []);
-  for (const t of live) inc[t.target].push({ from: t.from, steps: t.dir });
+  for (const t of live) inc[t.target].push({ from: t.from, steps: t.dir * (event === 'greased' ? 2 : 1) });
 
   // 3. The Decoy's tick 1 sham reverses on its target at the end of tick 2.
   let reversal = null;
@@ -140,7 +188,7 @@ function resolveTick(state, actions, rng = Math.random) {
   }
 
   // 4-5. Move every spring.
-  for (let i = 0; i < n; i++) pos[i] = applyIncoming(pos[i], inc[i].filter((t) => t.steps !== 0), sideBefore);
+  for (let i = 0; i < n; i++) pos[i] = applyIncoming(pos[i], inc[i].filter((t) => t.steps !== 0), sideBefore, event);
 
   // 6. Overwind: more than a third of the table tried to tighten a spring already at 2 or 3.
   let snap = null;
@@ -150,6 +198,14 @@ function resolveTick(state, actions, rng = Math.random) {
     pos[snap] = idxOf(-side(pos[snap]), 1);
   }
 
+  // Slipped Gear: one random spring slips a step toward the midline, or across it from tightness 1.
+  let slip = null;
+  if (event === 'slip') {
+    slip = Math.floor(rng() * n);
+    const sd = side(pos[slip]); const t = tight(pos[slip]);
+    pos[slip] = t > 1 ? idxOf(sd, t - 1) : idxOf(-sd, 1);
+  }
+
   players.forEach((p, i) => { p.idx = pos[i]; });
   const chime = players.filter((p, i) => side(p.idx) !== sideBefore[i]).length;
 
@@ -157,8 +213,9 @@ function resolveTick(state, actions, rng = Math.random) {
   const rustHolder = rolesBefore.indexOf('Rust');
   const rustTwist = twists.find((t) => t.from === rustHolder);
   const frozen = rustTwist ? rustTwist.target : -1;
+  const stuck = event === 'stuck' ? Math.floor(rng() * n) : -1;
   const reports = players.map((p, i) => {
-    if (i !== frozen) p.shown = tight(p.idx);
+    if (i !== frozen && i !== stuck) p.shown = tight(p.idx);
     const mine = twists.find((t) => t.from === i);
     const info = [];
     const role = rolesBefore[i];
@@ -186,6 +243,7 @@ function resolveTick(state, actions, rng = Math.random) {
 
   // 9. Loose faceplates hop after ticks 1 and 2, in seat order, at most once each.
   const hops = [];
+  let scramble = null;
   if (tickNo < TICKS - 1) {
     const moved = new Set();
     for (let i = 0; i < n; i++) {
@@ -198,6 +256,11 @@ function resolveTick(state, actions, rng = Math.random) {
       moved.add(r); if (LOOSE.has(back)) moved.add(back);
       hops.push({ from: i, to: mine.target, plate: r, back });
     }
+    if (event === 'scramble') {
+      const a = Math.floor(rng() * n); let b = Math.floor(rng() * (n - 1)); if (b >= a) b++;
+      [players[a].role, players[b].role] = [players[b].role, players[a].role];
+      scramble = [a, b];
+    }
     players.forEach((p, i) => {
       if (p.role !== rolesBefore[i]) { reports[i].newRole = p.role; reports[i].oldRole = rolesBefore[i]; }
     });
@@ -205,7 +268,7 @@ function resolveTick(state, actions, rng = Math.random) {
 
   const record = {
     tick: tickNo + 1, twists, idle, before, positions: players.map((p) => p.idx), snap, chime,
-    overwind: snap !== null, frozen, reversal, hops, roles: players.map((p) => p.role), reports,
+    overwind: snap !== null, frozen, stuck, slip, scramble, event, reversal, hops, roles: players.map((p) => p.role), reports,
   };
   state.log.push(record);
   state.tick++;
@@ -243,6 +306,6 @@ function score(state, declarations) {
 }
 
 module.exports = {
-  SETUPS, LOOSE, MIN_PLAYERS, MAX_PLAYERS, TICKS,
+  SETUPS, LOOSE, EVENTS, INFO, MIN_PLAYERS, MAX_PLAYERS, TICKS, drawEvents, drawPlates,
   side, tight, idxOf, shownRole, deal, resolveTick, score, applyIncoming,
 };

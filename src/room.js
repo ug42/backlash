@@ -40,7 +40,7 @@ class Room {
     this.players = [];            // {id, token, name, isBot, connected, score, ready}
     this.hostId = null;
     this.phase = 'LOBBY';         // LOBBY | DEAL | TICK | DECLARE | REVEAL
-    this.learning = false;
+    this.learning = false; this.events = true; this.variety = true;
     this.game = null; this.seats = []; this.choices = []; this.decls = [];
     this.history = [];            // per seat: [{tick, lines}]
     this.table = [];              // public per-tick facts
@@ -116,8 +116,10 @@ class Room {
     const n = this.players.length;
     if (n < E.MIN_PLAYERS || n > E.MAX_PLAYERS) throw new Error(`Backlash needs ${E.MIN_PLAYERS} to ${E.MAX_PLAYERS} players. Add bots to fill seats.`);
     this.learning = !!opts.learning;
+    if (typeof opts.events === 'boolean') this.events = opts.events;
+    if (typeof opts.variety === 'boolean') this.variety = opts.variety;
     this.seats = this.players.map((p) => p.id);
-    this.game = E.deal(n, this.rng, { learning: this.learning });
+    this.game = E.deal(n, this.rng, { learning: this.learning, events: this.events, variety: this.variety });
     this.choices = Array(n).fill(null);
     this.decls = Array(n).fill(null);
     this.table = []; this.result = null;
@@ -216,7 +218,8 @@ class Room {
       if (r.newRole) lines.push(`Your faceplate changed: ${PLATE_NAME[r.oldRole]} is gone and you now hold ${PLATE_NAME[r.newRole]}. ${PLATE_TEXT[E.shownRole(r.newRole)]}`);
       this.history[i].push({ tick: rec.tick, lines });
     });
-    this.table.push({ tick: rec.tick, chime: rec.chime, overwind: rec.overwind, idle: rec.idle.map(name) });
+    const fog = rec.event === 'fog';
+    this.table.push({ tick: rec.tick, event: E.EVENTS[rec.event].name, fog, chime: fog ? null : rec.chime, overwind: fog ? false : rec.overwind, idle: rec.idle.map(name) });
     this.choices = Array(g.n).fill(null);
     if (g.tick >= E.TICKS) this.setPhase('DECLARE', MS.declare);
     else this.setPhase('TICK', MS.tick);
@@ -253,6 +256,7 @@ class Room {
     const v = {
       t: 'state', code: this.code, phase: this.phase, now: Date.now(), deadline: this.deadline,
       hostId: this.hostId, you: me ? { id: me.id, name: me.name } : null, learning: this.learning,
+      events: this.events, variety: this.variety,
       min: E.MIN_PLAYERS, max: E.MAX_PLAYERS,
       players: this.players.map((p) => ({ id: p.id, name: p.name, isBot: p.isBot, connected: p.connected, ready: p.ready, score: p.score, seated: this.seatOf(p.id) >= 0 })),
       game: null, reveal: null,
@@ -264,6 +268,7 @@ class Room {
         faceplate: PLATE_NAME[gp.role], faceplateText: PLATE_TEXT[E.shownRole(gp.role)],
         dealSide: this.phase === 'DEAL' ? gp.dealSide : null,
         tightness: gp.shown,
+        event: this.phase === 'TICK' && this.game.events[this.game.tick] !== 'calm' ? E.EVENTS[this.game.events[this.game.tick]] : null,
         choice: this.choices[i] ? { target: this.seats[this.choices[i].target], dir: this.choices[i].dir } : null,
         declared: this.decls[i],
         history: this.history[i], table: this.table,
@@ -288,6 +293,11 @@ class Room {
       })),
       ticks: g.log.map((rec) => ({
         tick: rec.tick, chime: rec.chime, snap: rec.snap === null ? null : name(rec.snap),
+        event: rec.event === 'calm' ? null : E.EVENTS[rec.event].name,
+        slip: rec.slip === null ? null : name(rec.slip), stuck: rec.stuck >= 0 ? name(rec.stuck) : null,
+        scramble: rec.scramble ? rec.scramble.map(name) : null,
+        before: rec.before, crossed: rec.positions.map((x, i) => E.side(x) !== E.side(rec.before[i])),
+        plates: rec.roles.map((r) => PLATE_NAME[r] + (r === 'Cracked' ? ' (cracked)' : '')),
         frozen: rec.frozen >= 0 ? name(rec.frozen) : null,
         twists: rec.twists.map((t) => ({ from: name(t.from), target: name(t.target), dir: t.dir, jammed: t.jammed })),
         idle: rec.idle.map(name),

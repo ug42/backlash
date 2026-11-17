@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "FAST=1 node src/server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "sim": "node tools/sim.js"
   },
   "engines": { "node": ">=20" },
   "dependencies": { "ws": "^8.18.0" },
